@@ -38,4 +38,23 @@ class SteamConfig:
     MAX_PER_PAGE: int = 100
     MAX_API_ATTEMPTS: int = 10  # Увеличим для заполнения страт
 
+    # Константы для форматирования и логики
+    MINUTES_IN_HOUR: float = 60.0
+    VETERAN_PLAYTIME_THRESHOLD: float = 500.0
+    TAIL_VETERANS_COUNT: int = 5
+    PREVIEW_TEXT_LENGTH: int = 200
+    HELPFUL_THRESHOLD: int = 100
+    DEEP_CRITIC_PLAYTIME: int = 200
+    BAR_BLOCKS_COUNT: int = 10
+    
+    # Ревью и лимиты
+    MIN_REVIEWS_PER_SENTIMENT: int = 1
+    SENTIMENT_DIVISOR: int = 2
+    DATE_FORMAT: str = "%Y-%m-%d"
+    
+    # Константы для типов отзывов
+    REVIEW_TYPE_POSITIVE: str = "positive"
+    REVIEW_TYPE_NEGATIVE: str = "negative"
+    SORT_BY_ALL: str = "all"
+
 CONFIG = SteamConfig()

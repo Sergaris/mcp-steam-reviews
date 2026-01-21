@@ -1,16 +1,14 @@
 import httpx
 import urllib.parse
-import asyncio
 import re
-import math
-from typing import Optional, Dict, List, Tuple
+from typing import Optional
 from src.config.settings import CONFIG
 from src.models.review import SteamReview
 
 class SteamService:
     """Сервис для взаимодействия с Steam API."""
     
-    def __init__(self):
+    def __init__(self) -> None:
         self._headers = {"User-Agent": CONFIG.USER_AGENT}
         self._client = httpx.AsyncClient(
             headers=self._headers,
@@ -18,15 +16,28 @@ class SteamService:
             follow_redirects=True
         )
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> "SteamService":
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
         await self._client.aclose()
 
-    async def get_app_id(self, game_name: str) -> Optional[str]:
-        """Ищет AppID игры по названию."""
-        encoded_term = urllib.parse.quote(game_name)
+    async def get_app_id(self, game_input: str) -> tuple[Optional[str], Optional[str]]:
+        """
+        Ищет AppID и название игры.
+        game_input может быть названием игры или прямой ссылкой на Steam Store.
+        Возвращает (appid, game_name).
+        """
+        # 1. Проверяем, не является ли ввод ссылкой
+        app_id_match = re.search(r"(?:https?://)?(?:www\.)?store\.steampowered\.com/app/(\d+)", game_input)
+        if app_id_match:
+            appid = app_id_match.group(1)
+            # Пытаемся получить название через API, так как в ссылке оно может быть неточным или отсутствовать
+            name = await self.get_app_name(appid)
+            return appid, name or f"AppID {appid}"
+
+        # 2. Поиск по названию
+        encoded_term = urllib.parse.quote(game_input)
         url = f"https://store.steampowered.com/api/storesearch/?term={encoded_term}&l=english&cc=US"
         
         try:
@@ -35,9 +46,25 @@ class SteamService:
             data = response.json()
             
             if data.get("total", 0) > 0 and data.get("items"):
-                # Берем самый релевантный первый результат
-                return str(data["items"][0]["id"])
-        except Exception:
+                item = data["items"][0]
+                return str(item["id"]), item["name"]
+        except (httpx.HTTPError, ValueError, KeyError):
+            pass
+        return None, None
+
+    async def get_app_name(self, appid: str) -> Optional[str]:
+        """Получает официальное название игры по AppID."""
+        url = f"https://store.steampowered.com/api/appdetails?appids={appid}&l=english"
+        try:
+            response = await self._client.get(url)
+            response.raise_for_status()
+            data = response.json()
+            
+            app_data = data.get(appid)
+            if app_data and app_data.get("success"):
+                return app_data.get("data", {}).get("name")
+        except (httpx.HTTPError, ValueError, KeyError):
+            # В случае ошибки возвращаем None, чтобы вызывающая сторона могла использовать fallback
             pass
         return None
 
@@ -46,7 +73,7 @@ class SteamService:
         appid: str, 
         review_type: str, 
         target_count: int, 
-        sort_by: str = "all"
+        sort_by: str = CONFIG.SORT_BY_ALL
     ) -> list[SteamReview]:
         """
         Загружает отзывы, фильтрует их и применяет стратифицированную выборку.
@@ -56,7 +83,7 @@ class SteamService:
         attempts = 0
         
         # Определяем тип для API
-        api_review_type = "positive" if "pos" in review_type.lower() else "negative"
+        api_review_type = CONFIG.REVIEW_TYPE_POSITIVE if "pos" in review_type.lower() else CONFIG.REVIEW_TYPE_NEGATIVE
         
         # 1. Набор буфера отзывов
         while len(buffer) < CONFIG.FETCH_BUFFER_SIZE and attempts < CONFIG.MAX_API_ATTEMPTS:
@@ -71,7 +98,7 @@ class SteamService:
                 "cursor": cursor,
             }
             
-            if sort_by == "all":
+            if sort_by == CONFIG.SORT_BY_ALL:
                 params["day_range"] = CONFIG.ALL_TIME_DAYS
                 
             url = f"https://store.steampowered.com/appreviews/{appid}"
@@ -89,7 +116,8 @@ class SteamService:
                     break
                     
                 for r in new_reviews_data:
-                    hours = r.get("author", {}).get("playtime_forever", 0) / 60.0
+                    playtime_forever = r.get("author", {}).get("playtime_forever", 0)
+                    hours = playtime_forever / CONFIG.MINUTES_IN_HOUR
                     text = r.get("review", "").strip()
                     
                     # ОБЯЗАТЕЛЬНЫЕ ФИЛЬТРЫ
@@ -111,7 +139,7 @@ class SteamService:
                     break
                 cursor = new_cursor
                 
-            except Exception:
+            except (httpx.HTTPError, ValueError, KeyError):
                 break
         
         # Сортируем буфер по полезности (базовая сортировка Steam)
@@ -122,7 +150,7 @@ class SteamService:
 
     def _get_stratified_sample(self, reviews: list[SteamReview], total_target: int) -> list[SteamReview]:
         """Распределяет отзывы по стратам согласно процентам в CONFIG."""
-        strata_buckets: Dict[str, List[SteamReview]] = {name: [] for name in CONFIG.STRATA}
+        strata_buckets: dict[str, list[SteamReview]] = {name: [] for name in CONFIG.STRATA}
         
         # Распределяем по ведрам
         for r in reviews:
@@ -140,7 +168,7 @@ class SteamService:
             
         return result
 
-    def sort_and_arrange_reviews(self, pos_reviews: list[SteamReview], neg_reviews: list[SteamReview]) -> List[SteamReview]:
+    def sort_and_arrange_reviews(self, pos_reviews: list[SteamReview], neg_reviews: list[SteamReview]) -> list[SteamReview]:
         """
         Реализует оптимальный порядок отображения:
         1. Сортировка по весу (playtime * log(helpful+1)).
@@ -152,16 +180,16 @@ class SteamService:
         neg_sorted = sorted(neg_reviews, key=lambda r: r.weight, reverse=True)
         
         # Выделяем "якоря" для конца (защита от Recency Bias)
-        # 5-10 ветеранских негативов (500h+)
-        vet_neg_candidates = [r for r in neg_sorted if r.hours_played >= 500]
+        # Ветеранские негативы согласно порогу
+        vet_neg_candidates = [r for r in neg_sorted if r.hours_played >= CONFIG.VETERAN_PLAYTIME_THRESHOLD]
         # Самый helpful негатив вообще
         most_helpful_neg = sorted(neg_sorted, key=lambda r: r.votes_up, reverse=True)[0] if neg_sorted else None
         
-        # Формируем хвост: 5 ветеранов-негативов (если есть) + самый хелпфул негатив
+        # Формируем хвост: ветераны-негативы + самый хелпфул негатив
         tail_negatives = []
         if vet_neg_candidates:
-            # Берем до 5 топовых ветеранов-негативов, исключая самый хелпфул если он там есть
-            count = min(5, len(vet_neg_candidates))
+            # Берем топовых ветеранов-негативов согласно лимиту, исключая самый хелпфул если он там есть
+            count = min(CONFIG.TAIL_VETERANS_COUNT, len(vet_neg_candidates))
             tail_negatives = vet_neg_candidates[:count]
             if most_helpful_neg in tail_negatives:
                 tail_negatives.remove(most_helpful_neg)

@@ -21,9 +21,10 @@ class SteamReview:
 
     def format_for_ai(self) -> str:
         """Превращает отзыв в расширенный формат с метаданными."""
+        from src.config.settings import CONFIG
         sentiment = "POSITIVE" if self.is_positive else "NEGATIVE"
         free_tag = " [FREE PRODUCT]" if self.received_for_free else ""
-        date_str = datetime.fromtimestamp(self.created_at).strftime('%Y-%m-%d')
+        date_str = datetime.fromtimestamp(self.created_at).strftime(CONFIG.DATE_FORMAT)
         
         header = f"[{sentiment} | Playtime: {self.hours_played:.1f}h | Helpful: {self.votes_up} | Date: {date_str}]{free_tag}"
         

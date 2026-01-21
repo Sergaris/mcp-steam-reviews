@@ -5,12 +5,13 @@ import statistics
 from mcp.server.fastmcp import FastMCP  # type: ignore
 
 from src.config.settings import CONFIG
+from src.models.review import SteamReview
 from src.services.steam_service import SteamService
 
 # Инициализация FastMCP
 mcp = FastMCP("Steam Reviews")
 
-def get_playtime_distribution_bar(reviews: list, strata: dict) -> str:
+def get_playtime_distribution_bar(reviews: list[SteamReview], strata: dict[str, dict]) -> str:
     """Генерирует текстовый прогресс-бар распределения playtime."""
     counts = {name: 0 for name in strata}
     for r in reviews:
@@ -26,33 +27,37 @@ def get_playtime_distribution_bar(reviews: list, strata: dict) -> str:
     bar_parts = []
     for name, count in counts.items():
         pct = count / total
-        blocks = int(pct * 10)
+        blocks = int(pct * CONFIG.BAR_BLOCKS_COUNT)
         bar_parts.append(f"[{strata[name].get('min', 0)}-{strata[name].get('max', 'inf')}h: {'█' * blocks} {count}]")
     
     return " ".join(bar_parts)
 
 @mcp.tool()
-async def get_game_reviews(game_name: str, count: int = 40) -> str:
+async def get_game_reviews(game_id_or_name: str, count: int = 40) -> str:
     """
     Получает структурированные отзывы о игре в Steam для глубокого анализа.
+    Поддерживает поиск по названию или по прямой ссылке на страницу в Steam.
     Использует стратифицированную выборку, чередование тональности и 
     защиту от Recency Bias для оптимальной работы LLM.
     
     Args:
-        game_name: Название игры.
+        game_id_or_name: Название игры или ссылка (например, https://store.steampowered.com/app/257850/).
         count: Общее количество отзывов (будет разделено поровну между POS/NEG).
     """
-    half_count = max(1, count // 2)
+    if count < 1:
+        return "❌ Ошибка: Количество отзывов должно быть положительным числом."
+
+    half_count = max(CONFIG.MIN_REVIEWS_PER_SENTIMENT, count // CONFIG.SENTIMENT_DIVISOR)
     
     async with SteamService() as service:
-        # 1. Поиск AppID
-        appid = await service.get_app_id(game_name)
+        # 1. Поиск AppID и названия
+        appid, game_name = await service.get_app_id(game_id_or_name)
         if not appid:
-            return f"❌ Ошибка: Игра '{game_name}' не найдена в Steam."
+            return f"❌ Ошибка: Игра '{game_id_or_name}' не найдена в Steam."
             
         # 2. Параллельное получение отзывов по стратам
-        pos_task = service.fetch_reviews(appid, "positive", half_count)
-        neg_task = service.fetch_reviews(appid, "negative", half_count)
+        pos_task = service.fetch_reviews(appid, CONFIG.REVIEW_TYPE_POSITIVE, half_count)
+        neg_task = service.fetch_reviews(appid, CONFIG.REVIEW_TYPE_NEGATIVE, half_count)
         
         pos_reviews, neg_reviews = await asyncio.gather(pos_task, neg_task)
         
@@ -61,6 +66,8 @@ async def get_game_reviews(game_name: str, count: int = 40) -> str:
             
         # 3. Расчет статистики
         all_reviews = pos_reviews + neg_reviews
+        total_count = len(all_reviews)
+        
         playtimes = [r.hours_played for r in all_reviews]
         helpfulness = [r.votes_up for r in all_reviews]
         
@@ -75,15 +82,18 @@ async def get_game_reviews(game_name: str, count: int = 40) -> str:
         arranged_reviews = service.sort_and_arrange_reviews(pos_reviews, neg_reviews)
         
         # 6. Формирование отчета
+        pos_pct = (len(pos_reviews) / total_count * 100) if total_count > 0 else 0
+        neg_pct = (len(neg_reviews) / total_count * 100) if total_count > 0 else 0
+
         result = [
             f"# Анализ отзывов Steam: {game_name} (AppID: {appid})",
             "",
             "## Метаданные выборки",
             "| Метрика | Значение |",
             "|---------|----------|",
-            f"| Всего отзывов | {len(all_reviews)} |",
-            f"| Положительных | {len(pos_reviews)} ({len(pos_reviews)/len(all_reviews)*100:.0f}%) |",
-            f"| Отрицательных | {len(neg_reviews)} ({len(neg_reviews)/len(all_reviews)*100:.0f}%) |",
+            f"| Всего отзывов | {total_count} |",
+            f"| Положительных | {len(pos_reviews)} ({pos_pct:.0f}%) |",
+            f"| Отрицательных | {len(neg_reviews)} ({neg_pct:.0f}%) |",
             f"| Медианный playtime | {median_playtime:.1f}h |",
             f"| Медианный helpful | {median_helpful:.0f} |",
             "",
@@ -98,12 +108,12 @@ async def get_game_reviews(game_name: str, count: int = 40) -> str:
         
         if top_pos:
             result.append(f"**Самый helpful положительный ({top_pos.hours_played:.1f}h, helpful: {top_pos.votes_up}):**")
-            result.append(f"> {top_pos.text[:200]}...")
+            result.append(f"> {top_pos.text[:CONFIG.PREVIEW_TEXT_LENGTH]}...")
             result.append("")
             
         if top_neg:
             result.append(f"**Самый helpful отрицательный ({top_neg.hours_played:.1f}h, helpful: {top_neg.votes_up}):**")
-            result.append(f"> {top_neg.text[:200]}...")
+            result.append(f"> {top_neg.text[:CONFIG.PREVIEW_TEXT_LENGTH]}...")
             result.append("")
             
         result.append("---")
@@ -124,8 +134,8 @@ async def get_game_reviews(game_name: str, count: int = 40) -> str:
         result.append("- Конец списка содержит критически важные негативы от ветеранов (Bias Protection)")
         result.append("")
         result.append("**Задание для AI:**")
-        result.append("1. Проанализируй отзывы, обращая особое внимание на те, где helpful > 100.")
-        result.append("2. Изучи негативные отзывы с playtime > 200h — они содержат наиболее глубокую критику.")
+        result.append(f"1. Проанализируй отзывы, обращая особое внимание на те, где helpful > {CONFIG.HELPFUL_THRESHOLD}.")
+        result.append(f"2. Изучи негативные отзывы с playtime > {CONFIG.DEEP_CRITIC_PLAYTIME}h — они содержат наиболее глубокую критику.")
         result.append("3. Выдели 3-5 ключевых паттернов (проблем или достоинств), повторяющихся в разных группах игроков.")
         result.append("4. Оцени, как меняется восприятие игры по мере увеличения времени в ней.")
         
