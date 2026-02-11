@@ -21,7 +21,7 @@ class SteamConfig:
     
     # Параметры фильтрации
     MIN_PLAYTIME: float = 2.0
-    MIN_TEXT_LENGTH: int = 100
+    MIN_TEXT_LENGTH: int = 50
     
     # Буфер для выборки (сколько отзывов тянуть из API перед стратификацией)
     FETCH_BUFFER_SIZE: int = 300

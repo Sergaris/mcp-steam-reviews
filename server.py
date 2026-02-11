@@ -124,21 +124,7 @@ async def get_game_reviews(game_id_or_name: str, count: int = 40) -> str:
         for r in arranged_reviews:
             result.append(r.format_for_ai())
             result.append("")
-            
-        result.append("---")
-        result.append("## Инструкция для анализа")
-        result.append("Отзывы предоставлены в формате:")
-        result.append("- Чередование положительных и отрицательных (для нейтрализации tonal bias)")
-        result.append("- Сортировка по весу (playtime × helpful)")
-        result.append("- Метаданные: `[Sentiment | Playtime | Helpful | Date]`")
-        result.append("- Конец списка содержит критически важные негативы от ветеранов (Bias Protection)")
-        result.append("")
-        result.append("**Задание для AI:**")
-        result.append(f"1. Проанализируй отзывы, обращая особое внимание на те, где helpful > {CONFIG.HELPFUL_THRESHOLD}.")
-        result.append(f"2. Изучи негативные отзывы с playtime > {CONFIG.DEEP_CRITIC_PLAYTIME}h — они содержат наиболее глубокую критику.")
-        result.append("3. Выдели 3-5 ключевых паттернов (проблем или достоинств), повторяющихся в разных группах игроков.")
-        result.append("4. Оцени, как меняется восприятие игры по мере увеличения времени в ней.")
-        
+
         return "\n".join(result)
 
 if __name__ == "__main__":

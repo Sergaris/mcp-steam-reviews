@@ -82,9 +82,8 @@ class SteamService:
         cursor = "*"
         attempts = 0
         
-        # Определяем тип для API
         api_review_type = CONFIG.REVIEW_TYPE_POSITIVE if "pos" in review_type.lower() else CONFIG.REVIEW_TYPE_NEGATIVE
-        
+
         # 1. Набор буфера отзывов
         while len(buffer) < CONFIG.FETCH_BUFFER_SIZE and attempts < CONFIG.MAX_API_ATTEMPTS:
             attempts += 1
@@ -120,7 +119,6 @@ class SteamService:
                     hours = playtime_forever / CONFIG.MINUTES_IN_HOUR
                     text = r.get("review", "").strip()
                     
-                    # ОБЯЗАТЕЛЬНЫЕ ФИЛЬТРЫ
                     if hours < CONFIG.MIN_PLAYTIME or len(text) < CONFIG.MIN_TEXT_LENGTH:
                         continue
                         
