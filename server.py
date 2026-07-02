@@ -33,7 +33,7 @@ def get_playtime_distribution_bar(reviews: list[SteamReview], strata: dict[str, 
     return " ".join(bar_parts)
 
 @mcp.tool()
-async def get_game_reviews(game_id_or_name: str, count: int = 40) -> str:
+async def get_game_reviews(game_id_or_name: str, count: int = CONFIG.DEFAULT_REVIEW_COUNT) -> str:
     """
     Получает структурированные отзывы о игре в Steam для глубокого анализа.
     Поддерживает поиск по названию или по прямой ссылке на страницу в Steam.
@@ -43,6 +43,7 @@ async def get_game_reviews(game_id_or_name: str, count: int = 40) -> str:
     Args:
         game_id_or_name: Название игры или ссылка (например, https://store.steampowered.com/app/257850/).
         count: Общее количество отзывов (будет разделено поровну между POS/NEG).
+            По умолчанию 300 (150 положительных + 150 отрицательных).
     """
     if count < 1:
         return "❌ Ошибка: Количество отзывов должно быть положительным числом."

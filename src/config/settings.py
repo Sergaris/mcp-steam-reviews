@@ -1,5 +1,4 @@
 from dataclasses import dataclass, field
-from typing import Dict
 
 @dataclass(frozen=True)
 class SteamConfig:
@@ -12,8 +11,8 @@ class SteamConfig:
     )
     REQUEST_TIMEOUT: int = 15
     
-    # Количество отзывов для AI по умолчанию
-    DEFAULT_REVIEW_COUNT: int = 25 # 25 POS + 25 NEG = 50 total
+    # Количество отзывов по умолчанию (150 положительных + 150 отрицательных)
+    DEFAULT_REVIEW_COUNT: int = 300
     
     # Константы для поиска
     # Используем 100 лет (36500 дней) для получения "All Time" отзывов
@@ -24,10 +23,10 @@ class SteamConfig:
     MIN_TEXT_LENGTH: int = 50
     
     # Буфер для выборки (сколько отзывов тянуть из API перед стратификацией)
-    FETCH_BUFFER_SIZE: int = 300
+    FETCH_BUFFER_SIZE: int = 600
     
     # Страты выборки
-    STRATA: Dict[str, Dict] = field(default_factory=lambda: {
+    STRATA: dict[str, dict] = field(default_factory=lambda: {
         "Beginner": {"min": 2.0, "max": 20.0, "pct": 0.20},
         "Intermediate": {"min": 20.0, "max": 100.0, "pct": 0.40},
         "Veteran": {"min": 100.0, "max": 500.0, "pct": 0.30},
@@ -43,8 +42,6 @@ class SteamConfig:
     VETERAN_PLAYTIME_THRESHOLD: float = 500.0
     TAIL_VETERANS_COUNT: int = 5
     PREVIEW_TEXT_LENGTH: int = 200
-    HELPFUL_THRESHOLD: int = 100
-    DEEP_CRITIC_PLAYTIME: int = 200
     BAR_BLOCKS_COUNT: int = 10
     
     # Ревью и лимиты

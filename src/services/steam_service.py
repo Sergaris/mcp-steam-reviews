@@ -1,7 +1,6 @@
 import httpx
 import urllib.parse
 import re
-from typing import Optional
 from src.config.settings import CONFIG
 from src.models.review import SteamReview
 
@@ -22,7 +21,7 @@ class SteamService:
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
         await self._client.aclose()
 
-    async def get_app_id(self, game_input: str) -> tuple[Optional[str], Optional[str]]:
+    async def get_app_id(self, game_input: str) -> tuple[str | None, str | None]:
         """
         Ищет AppID и название игры.
         game_input может быть названием игры или прямой ссылкой на Steam Store.
@@ -52,7 +51,7 @@ class SteamService:
             pass
         return None, None
 
-    async def get_app_name(self, appid: str) -> Optional[str]:
+    async def get_app_name(self, appid: str) -> str | None:
         """Получает официальное название игры по AppID."""
         url = f"https://store.steampowered.com/api/appdetails?appids={appid}&l=english"
         try:
@@ -147,23 +146,36 @@ class SteamService:
         return self._get_stratified_sample(buffer, target_count)
 
     def _get_stratified_sample(self, reviews: list[SteamReview], total_target: int) -> list[SteamReview]:
-        """Распределяет отзывы по стратам согласно процентам в CONFIG."""
+        """Распределяет отзывы по стратам; квоту недобранных страт отдаёт остальным.
+
+        Args:
+            reviews: Буфер отзывов, отсортированный по полезности.
+            total_target: Сколько отзывов нужно вернуть.
+
+        Returns:
+            Выборка размером total_target (или меньше, если данных не хватает физически).
+        """
         strata_buckets: dict[str, list[SteamReview]] = {name: [] for name in CONFIG.STRATA}
-        
-        # Распределяем по ведрам
+
         for r in reviews:
             for name, bounds in CONFIG.STRATA.items():
                 if bounds["min"] <= r.hours_played < bounds["max"]:
                     strata_buckets[name].append(r)
                     break
-        
+
         result: list[SteamReview] = []
-        
-        # Выбираем из каждого ведра согласно проценту
         for name, bounds in CONFIG.STRATA.items():
             strat_target = max(1, int(total_target * bounds["pct"]))
             result.extend(strata_buckets[name][:strat_target])
-            
+
+        # Недобор страт компенсируем лучшими из оставшихся отзывов,
+        # чтобы итоговый размер выборки соответствовал запрошенному.
+        shortfall = total_target - len(result)
+        if shortfall > 0:
+            used_ids = {r.review_id for r in result}
+            leftovers = [r for r in reviews if r.review_id not in used_ids]
+            result.extend(leftovers[:shortfall])
+
         return result
 
     def sort_and_arrange_reviews(self, pos_reviews: list[SteamReview], neg_reviews: list[SteamReview]) -> list[SteamReview]:
