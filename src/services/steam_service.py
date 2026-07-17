@@ -21,72 +21,120 @@ class SteamService:
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
         await self._client.aclose()
 
-    async def get_app_id(self, game_input: str) -> tuple[str | None, str | None]:
+    async def get_app_id(self, game_input: str) -> tuple[str | None, str | None, bool]:
+        """Ищет AppID, название и признак бесплатной игры.
+
+        Args:
+            game_input: Название игры или ссылка на страницу Steam Store.
+
+        Returns:
+            Кортеж (appid, game_name, is_free). При неудаче — (None, None, False).
         """
-        Ищет AppID и название игры.
-        game_input может быть названием игры или прямой ссылкой на Steam Store.
-        Возвращает (appid, game_name).
-        """
+        appid: str | None = None
+        fallback_name: str | None = None
+
         # 1. Проверяем, не является ли ввод ссылкой
-        app_id_match = re.search(r"(?:https?://)?(?:www\.)?store\.steampowered\.com/app/(\d+)", game_input)
+        app_id_match = re.search(
+            r"(?:https?://)?(?:www\.)?store\.steampowered\.com/app/(\d+)",
+            game_input,
+        )
         if app_id_match:
             appid = app_id_match.group(1)
-            # Пытаемся получить название через API, так как в ссылке оно может быть неточным или отсутствовать
-            name = await self.get_app_name(appid)
-            return appid, name or f"AppID {appid}"
+        else:
+            # 2. Поиск по названию
+            encoded_term = urllib.parse.quote(game_input)
+            url = (
+                "https://store.steampowered.com/api/storesearch/"
+                f"?term={encoded_term}&l=english&cc=US"
+            )
+            try:
+                response = await self._client.get(url)
+                response.raise_for_status()
+                data = response.json()
+                if data.get("total", 0) > 0 and data.get("items"):
+                    item = data["items"][0]
+                    appid = str(item["id"])
+                    fallback_name = item.get("name")
+            except (httpx.HTTPError, ValueError, KeyError):
+                return None, None, False
 
-        # 2. Поиск по названию
-        encoded_term = urllib.parse.quote(game_input)
-        url = f"https://store.steampowered.com/api/storesearch/?term={encoded_term}&l=english&cc=US"
-        
-        try:
-            response = await self._client.get(url)
-            response.raise_for_status()
-            data = response.json()
-            
-            if data.get("total", 0) > 0 and data.get("items"):
-                item = data["items"][0]
-                return str(item["id"]), item["name"]
-        except (httpx.HTTPError, ValueError, KeyError):
-            pass
-        return None, None
+        if not appid:
+            return None, None, False
 
-    async def get_app_name(self, appid: str) -> str | None:
-        """Получает официальное название игры по AppID."""
+        name, is_free = await self.get_app_metadata(appid)
+        return appid, name or fallback_name or f"AppID {appid}", is_free
+
+    async def get_app_metadata(self, appid: str) -> tuple[str | None, bool]:
+        """Читает название и флаг is_free из Steam appdetails.
+
+        Args:
+            appid: Идентификатор приложения в Steam.
+
+        Returns:
+            Кортеж (name, is_free). При ошибке API — (None, False).
+        """
         url = f"https://store.steampowered.com/api/appdetails?appids={appid}&l=english"
         try:
             response = await self._client.get(url)
             response.raise_for_status()
             data = response.json()
-            
+
             app_data = data.get(appid)
             if app_data and app_data.get("success"):
-                return app_data.get("data", {}).get("name")
+                details = app_data.get("data", {})
+                name = details.get("name")
+                is_free = bool(details.get("is_free", False))
+                return name, is_free
         except (httpx.HTTPError, ValueError, KeyError):
-            # В случае ошибки возвращаем None, чтобы вызывающая сторона могла использовать fallback
             pass
-        return None
+        return None, False
+
+    async def get_app_name(self, appid: str) -> str | None:
+        """Получает официальное название игры по AppID."""
+        name, _is_free = await self.get_app_metadata(appid)
+        return name
 
     async def fetch_reviews(
-        self, 
-        appid: str, 
-        review_type: str, 
-        target_count: int, 
-        sort_by: str = CONFIG.SORT_BY_ALL
+        self,
+        appid: str,
+        review_type: str,
+        target_count: int,
+        sort_by: str = CONFIG.SORT_BY_ALL,
+        *,
+        is_free_to_play: bool = False,
     ) -> list[SteamReview]:
-        """
-        Загружает отзывы, фильтрует их и применяет стратифицированную выборку.
+        """Загружает отзывы, фильтрует их и применяет стратифицированную выборку.
+
+        Args:
+            appid: Идентификатор приложения в Steam.
+            review_type: positive / negative (или строка с ``pos`` / иначе negative).
+            target_count: Сколько отзывов нужно после стратификации.
+            sort_by: Режим сортировки Steam API (по умолчанию all-time).
+            is_free_to_play: Если True, запрашивает все лицензии
+                (``purchase_type=all``), иначе только покупки Steam.
+
+        Returns:
+            Стратифицированная выборка отзывов.
         """
         buffer: list[SteamReview] = []
         cursor = "*"
         attempts = 0
-        
-        api_review_type = CONFIG.REVIEW_TYPE_POSITIVE if "pos" in review_type.lower() else CONFIG.REVIEW_TYPE_NEGATIVE
+
+        api_review_type = (
+            CONFIG.REVIEW_TYPE_POSITIVE
+            if "pos" in review_type.lower()
+            else CONFIG.REVIEW_TYPE_NEGATIVE
+        )
+        purchase_type = (
+            CONFIG.PURCHASE_TYPE_ALL
+            if is_free_to_play
+            else CONFIG.PURCHASE_TYPE_STEAM
+        )
 
         # 1. Набор буфера отзывов
         while len(buffer) < CONFIG.FETCH_BUFFER_SIZE and attempts < CONFIG.MAX_API_ATTEMPTS:
             attempts += 1
-            
+
             params = {
                 "json": 1,
                 "filter": sort_by,
@@ -94,11 +142,12 @@ class SteamService:
                 "review_type": api_review_type,
                 "num_per_page": CONFIG.MAX_PER_PAGE,
                 "cursor": cursor,
+                "purchase_type": purchase_type,
             }
-            
+
             if sort_by == CONFIG.SORT_BY_ALL:
                 params["day_range"] = CONFIG.ALL_TIME_DAYS
-                
+
             url = f"https://store.steampowered.com/appreviews/{appid}"
             
             try:

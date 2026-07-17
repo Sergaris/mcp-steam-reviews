@@ -43,7 +43,7 @@ async def get_game_reviews(game_id_or_name: str, count: int = CONFIG.DEFAULT_REV
     Args:
         game_id_or_name: Название игры или ссылка (например, https://store.steampowered.com/app/257850/).
         count: Общее количество отзывов (будет разделено поровну между POS/NEG).
-            По умолчанию 300 (150 положительных + 150 отрицательных).
+            По умолчанию 500 (250 положительных + 250 отрицательных).
     """
     if count < 1:
         return "❌ Ошибка: Количество отзывов должно быть положительным числом."
@@ -51,14 +51,24 @@ async def get_game_reviews(game_id_or_name: str, count: int = CONFIG.DEFAULT_REV
     half_count = max(CONFIG.MIN_REVIEWS_PER_SENTIMENT, count // CONFIG.SENTIMENT_DIVISOR)
     
     async with SteamService() as service:
-        # 1. Поиск AppID и названия
-        appid, game_name = await service.get_app_id(game_id_or_name)
+        # 1. Поиск AppID, названия и признака F2P
+        appid, game_name, is_free_to_play = await service.get_app_id(game_id_or_name)
         if not appid:
             return f"❌ Ошибка: Игра '{game_id_or_name}' не найдена в Steam."
             
         # 2. Параллельное получение отзывов по стратам
-        pos_task = service.fetch_reviews(appid, CONFIG.REVIEW_TYPE_POSITIVE, half_count)
-        neg_task = service.fetch_reviews(appid, CONFIG.REVIEW_TYPE_NEGATIVE, half_count)
+        pos_task = service.fetch_reviews(
+            appid,
+            CONFIG.REVIEW_TYPE_POSITIVE,
+            half_count,
+            is_free_to_play=is_free_to_play,
+        )
+        neg_task = service.fetch_reviews(
+            appid,
+            CONFIG.REVIEW_TYPE_NEGATIVE,
+            half_count,
+            is_free_to_play=is_free_to_play,
+        )
         
         pos_reviews, neg_reviews = await asyncio.gather(pos_task, neg_task)
         
@@ -85,6 +95,11 @@ async def get_game_reviews(game_id_or_name: str, count: int = CONFIG.DEFAULT_REV
         # 6. Формирование отчета
         pos_pct = (len(pos_reviews) / total_count * 100) if total_count > 0 else 0
         neg_pct = (len(neg_reviews) / total_count * 100) if total_count > 0 else 0
+        purchase_mode = (
+            f"{CONFIG.PURCHASE_TYPE_ALL} (F2P: включены бесплатные лицензии)"
+            if is_free_to_play
+            else f"{CONFIG.PURCHASE_TYPE_STEAM} (только покупки Steam)"
+        )
 
         result = [
             f"# Анализ отзывов Steam: {game_name} (AppID: {appid})",
@@ -97,6 +112,8 @@ async def get_game_reviews(game_id_or_name: str, count: int = CONFIG.DEFAULT_REV
             f"| Отрицательных | {len(neg_reviews)} ({neg_pct:.0f}%) |",
             f"| Медианный playtime | {median_playtime:.1f}h |",
             f"| Медианный helpful | {median_helpful:.0f} |",
+            f"| Бесплатная игра | {'да' if is_free_to_play else 'нет'} |",
+            f"| purchase_type | {purchase_mode} |",
             "",
             "## Распределение playtime",
             "```",

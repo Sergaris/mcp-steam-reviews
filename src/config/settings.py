@@ -11,8 +11,8 @@ class SteamConfig:
     )
     REQUEST_TIMEOUT: int = 15
     
-    # Количество отзывов по умолчанию (150 положительных + 150 отрицательных)
-    DEFAULT_REVIEW_COUNT: int = 300
+    # Количество отзывов по умолчанию (250 положительных + 250 отрицательных)
+    DEFAULT_REVIEW_COUNT: int = 500
     
     # Константы для поиска
     # Используем 100 лет (36500 дней) для получения "All Time" отзывов
@@ -23,7 +23,7 @@ class SteamConfig:
     MIN_TEXT_LENGTH: int = 50
     
     # Буфер для выборки (сколько отзывов тянуть из API перед стратификацией)
-    FETCH_BUFFER_SIZE: int = 600
+    FETCH_BUFFER_SIZE: int = 1000
     
     # Страты выборки
     STRATA: dict[str, dict] = field(default_factory=lambda: {
@@ -35,7 +35,7 @@ class SteamConfig:
     
     # Лимиты API
     MAX_PER_PAGE: int = 100
-    MAX_API_ATTEMPTS: int = 10  # Увеличим для заполнения страт
+    MAX_API_ATTEMPTS: int = 20  # Запас для фильтрации коротких отзывов и заполнения страт
 
     # Константы для форматирования и логики
     MINUTES_IN_HOUR: float = 60.0
@@ -53,5 +53,10 @@ class SteamConfig:
     REVIEW_TYPE_POSITIVE: str = "positive"
     REVIEW_TYPE_NEGATIVE: str = "negative"
     SORT_BY_ALL: str = "all"
+
+    # Steam appreviews: без purchase_type=all у F2P остаются только
+    # редкие отзывы после покупки в Steam (ключи/DLC), а не основная масса.
+    PURCHASE_TYPE_STEAM: str = "steam"
+    PURCHASE_TYPE_ALL: str = "all"
 
 CONFIG = SteamConfig()
